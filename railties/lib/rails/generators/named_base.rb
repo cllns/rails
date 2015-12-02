@@ -41,7 +41,9 @@ module Rails
         # if namespace exists and is not skipped
         def module_namespacing(&block)
           content = capture(&block)
-          content = wrap_with_namespace(content) if namespaced?
+          namespaces.reverse.each do |namespace|
+            content = wrap_with_namespace(namespace, content)
+          end
           concat(content)
         end
 
@@ -50,9 +52,9 @@ module Rails
           content.each_line.map {|line| line.blank? ? line : "#{spaces}#{line}" }.join
         end
 
-        def wrap_with_namespace(content)
+        def wrap_with_namespace(module_name, content)
           content = indent(content).chomp
-          "module #{namespace.name}\n#{content}\nend\n"
+          "module #{module_name}\n#{content}\nend\n"
         end
 
         def inside_template
@@ -66,12 +68,34 @@ module Rails
           @inside_template
         end
 
-        def namespace
+        def namespaces
+          if engine_namespaced?
+            namespaces = ([engine_namespace.name] + [provided_namespaces]).flatten
+          else
+            namespaces = provided_namespaces
+          end
+        end
+
+        def engine_namespace
           Rails::Generators.namespace
         end
 
+        def engine_namespaced?
+          !options[:skip_namespace] && engine_namespace
+        end
+
+        # *Not* the engine namespace, but if someone names their generated
+        # item 'Foo::Bar', this will return Foo
+        def provided_namespaces
+          camelized_name_segments[0...-1]
+        end
+
+        def namespace
+          engine_namespace
+        end
+
         def namespaced?
-          !options[:skip_namespace] && namespace
+          engine_namespaced?
         end
 
         def file_path
@@ -79,7 +103,11 @@ module Rails
         end
 
         def class_path
-          inside_template? || !namespaced? ? regular_class_path : namespaced_class_path
+          if inside_template? || !namespaced?
+            regular_class_path
+          else
+            namespaced_class_path
+          end
         end
 
         def regular_class_path
@@ -99,7 +127,7 @@ module Rails
         end
 
         def class_name
-          (class_path + [file_name]).map!(&:camelize).join('::')
+          file_name.camelize
         end
 
         def human_name
@@ -159,9 +187,16 @@ module Rails
         end
 
         def assign_names!(name) #:nodoc:
-          @class_path = name.include?('/') ? name.split('/') : name.split('::')
-          @class_path.map!(&:underscore)
+          @class_path = camelized_name_segments.map(&:underscore)
           @file_name = @class_path.pop
+        end
+
+        def camelized_name_segments
+          if name.include?('/')
+            name.split('/').map(&:camelize)
+          else
+            name.split('::').map(&:camelize)
+          end
         end
 
         # Convert attributes array into GeneratedAttribute objects.
@@ -184,7 +219,7 @@ module Rails
         end
 
         def mountable_engine?
-          defined?(ENGINE_ROOT) && namespaced?
+          defined?(ENGINE_ROOT) && engine_namespaced?
         end
 
         # Add a class collisions name to be checked on class initialization. You
